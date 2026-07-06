@@ -1,0 +1,53 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  deploy:
+    # Run when: (a) push to develop, or (b) a PR into main was actually merged
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'push' && 'development' || 'production' }}
+
+    steps:
+      - name: Set environment-specific variables
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            echo "env_name=dev" >> "$GITHUB_OUTPUT"
+            echo "branch=develop" >> "$GITHUB_OUTPUT"
+          else
+            echo "env_name=production" >> "$GITHUB_OUTPUT"
+            echo "branch=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DEPLOY_PATH: ${{ steps.vars.outputs.env_name == 'dev' && secrets.DEV_PATH || secrets.PROD_PATH }}
+          ENV_FILE_CONTENT: ${{ steps.vars.outputs.env_name == 'dev' && secrets.DEV_ENV_FILE || secrets.PROD_ENV_FILE }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          envs: DEPLOY_PATH,ENV_FILE_CONTENT
+          script: |
+            cd "$DEPLOY_PATH"
+            git checkout ${{ steps.vars.outputs.branch }}
+            git pull origin ${{ steps.vars.outputs.branch }}
+
+            # write .env file from the matching secret
+            echo "$ENV_FILE_CONTENT" > .env
+
+            yarn install --frozen-lockfile
+            yarn build
